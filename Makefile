@@ -1,4 +1,4 @@
-CFLAGS= -lssl -lpthread 
+CFLAGS=-Wall -g -lssl -lpthread 
 CC=gcc
 
 client: src/client.c
