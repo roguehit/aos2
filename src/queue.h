@@ -6,9 +6,9 @@
 #include<stdlib.h>
 #include<string.h>
 #include<unistd.h>
-
 #include <signal.h>
 
+#define MAX_CLIENT 50
 /*
 This contains the PID of the client
 If client[x]!=0, Server attaches to the clients shared memory 
@@ -17,7 +17,7 @@ Its SH_KEY = PID of Client
 typedef struct __global_mem
 {
 pid_t server;
-pid_t client[50]; 
+pid_t client[MAX_CLIENT]; 
 }global_mem;
 
 pid_t* client;
@@ -36,14 +36,12 @@ struct queue
 	int head;
 	int tail;
 };
-//initialize q
+/*initialize q*/
 
 void initialize_queue(struct queue *q)
 {
-	//q->elements = ;	
 	q->head = MAXLENGTH-1;
 	q->tail = MAXLENGTH-1;
-	
 }
 
 int is_empty(struct queue *q)

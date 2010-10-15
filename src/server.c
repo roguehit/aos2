@@ -27,16 +27,12 @@
 #include <openssl/bn.h>
 
 #include <errno.h>
+#include <pthread.h>
+#include <assert.h>
 /*--------------------------------------+
 | Constants                             |
 +--------------------------------------*/
-/* value to fill memory segment        */
-#define MEM_CHK_CHAR         '*'    
 
-/* shared memory key                   */
-#define SHM_KEY      (key_t)1097    
-#define SHM_KEY1     (key_t)1098  
-#define SHM_KEY2     (key_t)1099
 /* size of memory segment (bytes)      */
 #define SHM_SIZE     (size_t)100*1024   
 
@@ -50,6 +46,8 @@
 |            exit(EXIT_FAILURE)           |
 +-----------------------------------------*/
 global_mem *message_box;
+int globalSegID; 
+
 void SIGINT_handler (int);
 
 void print_bignumber(char *number)
@@ -64,95 +62,74 @@ void print_bignumber(char *number)
 }
 
 void compute_mod(Task *task);
-int main()
+
+void message_box_init ()
 {
-printf("Note to self do a Ctrl + C to stop erver.change this later\n");
-/* shared memory segment id           */
-    int reqMemSegID,i;             
-    int resMemSegID;
-    int globalSegID,ShmID;
-/* shared memory flags                */
-    int shmFlags;               
-    
-    pid_t pid;
-
-/*pointer to the queue			*/
-struct queue *request_ring;
-struct queue *response_ring;
-
-
-pid_t *pidPtr,*ShmPTR;
-/* Declare Task 	*/
-Task task;
-
+pid_t pid;
+int i;
 key_t MyKey;
 /*Get the current process ID*/
 pid = getpid();
 
-#if 0 
-/* Get the Key, This Key will be same for Server & Clients */
-if ( MyKey   = ftok(".", 's') == -1  )
-{
-fprintf(stderr,"Could not get the key value from ftok %s\n",strerror(errno));
-exit(0);
-}
-
-shmFlags = IPC_CREAT | SHM_PERM;
-
-//printf("Size of Shared mem %d\n",sizeof(global_mem));
-/*Get the ID*/
-
-if(globalSegID = shmget(MyKey,sizeof(pid_t), IPC_CREAT | 0666 ) < 0)
-{
-fprintf(stderr,"Could not get the Seg ID : %s\n",strerror(errno));
-exit(0);
-}
-
-/*Attach the message box*/
-pidPtr  = (pid_t*) shmat(globalSegID, NULL, 0);
-#if 0
-if (pidPtr  =  shmat(globalSegID, NULL, 0) == (void*) -1 )
-{
-fprintf(stderr,"Could not attach : %s\n",strerror(errno));
-exit(0);
-}
-#endif
-
-#endif
 /*Push the server PID into the message box for other clients to read */
 MyKey   = ftok(".", 's');    
-ShmID   = shmget(MyKey, sizeof(pid_t), IPC_CREAT | 0666);
-message_box  = (pid_t *) shmat(ShmID, NULL, 0);
+globalSegID   = shmget(MyKey, sizeof(pid_t), IPC_CREAT | 0666);
+message_box  = (global_mem*) shmat(globalSegID, NULL, 0);
 
 for(i=0;i<50;i++)
 message_box->client[i]=0;
 
 message_box->server = pid;
 
-//*pidPtr = pid;    
+}
 
-/*Install Signal Handler to service alive messages from other clients*/
-if (signal(SIGUSR1, SIGINT_handler) == SIG_ERR) {
-      printf("SIGINT install error\n");
-      exit(1);
-     }
-     
+void* server_thread (void* t)
+{
+/* shared memory segment id           */
+int MyKey;
+int reqMemSegID;             
+int resMemSegID;
+/* shared memory flags                */
+int shmFlags;               
+    
+/*pointer to the queue			*/
+struct queue *request_ring;
+struct queue *response_ring;
+
+
+/*Keys to request & response structures*/
+int REQ_KEY,RES_KEY;     
+
+/*Get the Thread ID */
+int tid =  (int)(int*)t;
+MyKey   =  (int)message_box->client[tid];  
+printf("Servicing Client with Process ID %d, Thread ID %d\n",(int)MyKey,tid);
+
+/*Get the keys for both rings*/
+REQ_KEY = ftok(".", (int) MyKey * 0xAA );    
+RES_KEY = ftok(".", (int) MyKey * 0x33 );
+
+/*Should not happen*/
+assert(REQ_KEY != RES_KEY);
+
+#if 1
 /*---------------------------------------*/
 /* Create shared memory segment          */
 /* Give everyone read/write permissions. */
 /*---------------------------------------*/
+
 shmFlags = IPC_CREAT | SHM_PERM;
-//Request ring creation
+/*Request ring creation*/
  if ( (reqMemSegID = 
-  shmget(SHM_KEY, SHM_SIZE, shmFlags)) < 0 )
+  shmget(REQ_KEY, SHM_SIZE, shmFlags)) < 0 )
    {
        perror("SERVER: shmget");
        exit(EXIT_FAILURE);
    }
 printf("Created shared location for request ring buffer\n");
-//Response ring creation
+/*Response ring creation*/
 if ( (resMemSegID = 
-  shmget(SHM_KEY1, SHM_SIZE, shmFlags)) < 0 )
+  shmget(RES_KEY, SHM_SIZE, shmFlags)) < 0 )
    {
        perror("SERVER: shmget");
        exit(EXIT_FAILURE);
@@ -164,9 +141,9 @@ printf("Created shared location for response ring buffer\n");
 /* space at an address                       */
 /* selected by the system.                   */
 /*-------------------------------------------*/
-//Changed by Pradeep
+/*Changed by Pradeep*/
 shmFlags = 0;
-//Get Request Ring
+/*Get Request Ring*/
 if ( (request_ring = 
       shmat(reqMemSegID, NULL, shmFlags)) == 
   (void *) -1 )
@@ -175,7 +152,7 @@ if ( (request_ring =
        exit(EXIT_FAILURE);
    }
 printf("Request Ring buffer attached to process\n");
-//Get Response Ring
+/*Get Response Ring*/
 if ( (response_ring = 
       shmat(resMemSegID, NULL, shmFlags)) == 
   (void *) -1 )
@@ -185,23 +162,7 @@ if ( (response_ring =
    }
 printf("Response Ring buffer attached to process\n");
 
-/*-------------------------------------------*/
-/* Fill the memory segment with MEM_CHK_CHAR */
-/* for other processes to read               */
-/*-------------------------------------------*/
-   //memset(shMemSeg, MEM_CHK_CHAR, SHM_SIZE);
-	
 
-/*-----------------------------------------------*/
-/* Go to sleep until some other process changes  */
-/* first character                               */
-/* in the shared memory segment.                 */
-/*-----------------------------------------------*/
- /*  while (*shMemSeg == MEM_CHK_CHAR)
-   {
-      sleep(1);
-   }*/
-//Go on forever
 while(1){
 	if(is_empty(request_ring))
 	{
@@ -214,11 +175,8 @@ while(1){
 		Task temp = dequeue(request_ring);
 		compute_mod(&temp);
 		printf("Computed Mod\n");
-		//Get response ring
-		//c+=1;
-		/*Do not Enqueue Just yet*/
+		
 	        enqueue(response_ring,temp);
-		//i++;
 	}
 }
 /*------------------------------------------------*/
@@ -230,11 +188,12 @@ while(1){
        exit(EXIT_FAILURE);
    }
 
-   if ( shmdt(message_box) < 0 )
+  if ( shmdt(response_ring) < 0 )
    {
-	perror("Could not Detach ShmPTR");
-	exit(EXIT_FAILURE);
+       perror("SERVER: shmdt");
+       exit(EXIT_FAILURE);
    }
+
     
 
 /*--------------------------------------------------*/
@@ -246,14 +205,15 @@ while(1){
        exit(EXIT_FAILURE);
    }
 
-   if(shmctl(globalSegID, IPC_RMID, NULL) < 0)
+  if (shmctl(resMemSegID, IPC_RMID, NULL) < 0)
    {
- 	perror("Could not detach Global Segment ID");
-	exit(EXIT_FAILURE);
-   } 
+       perror("SERVER: shmctl");
+       exit(EXIT_FAILURE);
+   }
+ 
 
    exit(EXIT_SUCCESS);
-
+#endif
 }  /* end of main() */
 /*--------------------------------------------------*/
 /* Compute Modulus				   */
@@ -262,7 +222,7 @@ void compute_mod(Task * task)
 {
 	BN_CTX *context;
        	BIGNUM *r,*a,*p,*m;
-        if(p==NULL){
+        if(task->p==NULL){
 	fprintf(stderr,"Wrong Exponent\n");
 	exit(0);
         }
@@ -295,13 +255,52 @@ void  SIGINT_handler(int sig)
     
      block_signal(sig);
      int i;
+     pthread_t thread;
 //     signal(sig, SIG_IGN);
      printf("From SIGINT: just got a %d (SIGUSR1) signal\n", sig);
      
      for(i=0;message_box->client[i]!=0;i++);
-     printf("Client PID %d, Index: %d\n",(int)message_box->client[i-1],i-1);     
-//     signal(sig, SIGINT_handler);
+     printf("Creating Thread for - Client with PID %d, Index: %d\n",(int)message_box->client[i-1],i-1);     
+//   signal(sig, SIGINT_handler);
+
+     pthread_create(&thread,NULL,server_thread,(void*) (i-1));
+     pthread_detach(thread);
+
      unblock_signal(sig);
 }
 
+int main (int argc, char **argv)
+{
 
+
+    message_box_init();
+
+/*Install Signal Handler to service I-am-alive messages from other clients*/
+    if (signal(SIGUSR1, SIGINT_handler) == SIG_ERR) {
+      printf("SIGINT install error\n");
+      exit(1);
+     }
+
+    while(1){
+	/*Sleep Infinitely & wait for Signals from Clients*/
+	printf("Waiting ..\n");
+	sleep(1);	
+    }
+
+
+/*Clean up for Global Message box*/
+   if ( shmdt(message_box) < 0 )
+   {
+	perror("Could not Detach message_box");
+	exit(EXIT_FAILURE);
+   }
+
+  if(shmctl(globalSegID, IPC_RMID, NULL) < 0)
+   {
+ 	perror("Could not detach Global Segment ID");
+	exit(EXIT_FAILURE);
+   } 
+
+
+return 0;
+}
