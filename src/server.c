@@ -25,6 +25,8 @@
 #include <math.h>
 
 #include <openssl/bn.h>
+
+#include <errno.h>
 /*--------------------------------------+
 | Constants                             |
 +--------------------------------------*/
@@ -33,7 +35,8 @@
 
 /* shared memory key                   */
 #define SHM_KEY      (key_t)1097    
-#define SHM_KEY1      (key_t)1098  
+#define SHM_KEY1     (key_t)1098  
+#define SHM_KEY2     (key_t)1099
 /* size of memory segment (bytes)      */
 #define SHM_SIZE     (size_t)100*1024   
 
@@ -46,6 +49,8 @@
 | Returns:   exit(EXIT_SUCCESS) or        |
 |            exit(EXIT_FAILURE)           |
 +-----------------------------------------*/
+global_mem *message_box;
+void SIGINT_handler (int);
 
 void print_bignumber(char *number)
 {
@@ -63,24 +68,80 @@ int main()
 {
 printf("Note to self do a Ctrl + C to stop erver.change this later\n");
 /* shared memory segment id           */
-    int reqMemSegID;             
+    int reqMemSegID,i;             
     int resMemSegID;
+    int globalSegID,ShmID;
 /* shared memory flags                */
     int shmFlags;               
-
-/* ptr to shared memory segment       */          
+    
+    pid_t pid;
 
 /*pointer to the queue			*/
 struct queue *request_ring;
 struct queue *response_ring;
 
+
+pid_t *pidPtr,*ShmPTR;
 /* Declare Task 	*/
 Task task;
+
+key_t MyKey;
+/*Get the current process ID*/
+pid = getpid();
+
+#if 0 
+/* Get the Key, This Key will be same for Server & Clients */
+if ( MyKey   = ftok(".", 's') == -1  )
+{
+fprintf(stderr,"Could not get the key value from ftok %s\n",strerror(errno));
+exit(0);
+}
+
+shmFlags = IPC_CREAT | SHM_PERM;
+
+//printf("Size of Shared mem %d\n",sizeof(global_mem));
+/*Get the ID*/
+
+if(globalSegID = shmget(MyKey,sizeof(pid_t), IPC_CREAT | 0666 ) < 0)
+{
+fprintf(stderr,"Could not get the Seg ID : %s\n",strerror(errno));
+exit(0);
+}
+
+/*Attach the message box*/
+pidPtr  = (pid_t*) shmat(globalSegID, NULL, 0);
+#if 0
+if (pidPtr  =  shmat(globalSegID, NULL, 0) == (void*) -1 )
+{
+fprintf(stderr,"Could not attach : %s\n",strerror(errno));
+exit(0);
+}
+#endif
+
+#endif
+/*Push the server PID into the message box for other clients to read */
+MyKey   = ftok(".", 's');    
+ShmID   = shmget(MyKey, sizeof(pid_t), IPC_CREAT | 0666);
+message_box  = (pid_t *) shmat(ShmID, NULL, 0);
+
+for(i=0;i<50;i++)
+message_box->client[i]=0;
+
+message_box->server = pid;
+
+//*pidPtr = pid;    
+
+/*Install Signal Handler to service alive messages from other clients*/
+if (signal(SIGUSR1, SIGINT_handler) == SIG_ERR) {
+      printf("SIGINT install error\n");
+      exit(1);
+     }
+     
 /*---------------------------------------*/
 /* Create shared memory segment          */
 /* Give everyone read/write permissions. */
 /*---------------------------------------*/
-   shmFlags = IPC_CREAT | SHM_PERM;
+shmFlags = IPC_CREAT | SHM_PERM;
 //Request ring creation
  if ( (reqMemSegID = 
   shmget(SHM_KEY, SHM_SIZE, shmFlags)) < 0 )
@@ -123,6 +184,7 @@ if ( (response_ring =
        exit(EXIT_FAILURE);
    }
 printf("Response Ring buffer attached to process\n");
+
 /*-------------------------------------------*/
 /* Fill the memory segment with MEM_CHK_CHAR */
 /* for other processes to read               */
@@ -168,6 +230,12 @@ while(1){
        exit(EXIT_FAILURE);
    }
 
+   if ( shmdt(message_box) < 0 )
+   {
+	perror("Could not Detach ShmPTR");
+	exit(EXIT_FAILURE);
+   }
+    
 
 /*--------------------------------------------------*/
 /* Call shmctl to remove shared memory segment.     */
@@ -177,7 +245,13 @@ while(1){
        perror("SERVER: shmctl");
        exit(EXIT_FAILURE);
    }
- 
+
+   if(shmctl(globalSegID, IPC_RMID, NULL) < 0)
+   {
+ 	perror("Could not detach Global Segment ID");
+	exit(EXIT_FAILURE);
+   } 
+
    exit(EXIT_SUCCESS);
 
 }  /* end of main() */
@@ -215,3 +289,19 @@ void compute_mod(Task * task)
 	
 	return;
 }
+
+void  SIGINT_handler(int sig)
+{
+    
+     block_signal(sig);
+     int i;
+//     signal(sig, SIG_IGN);
+     printf("From SIGINT: just got a %d (SIGUSR1) signal\n", sig);
+     
+     for(i=0;message_box->client[i]!=0;i++);
+     printf("Client PID %d, Index: %d\n",(int)message_box->client[i-1],i-1);     
+//     signal(sig, SIGINT_handler);
+     unblock_signal(sig);
+}
+
+

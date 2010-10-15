@@ -20,7 +20,7 @@
 
 	#include <errno.h>
 	#include <openssl/bn.h>
-
+	#include <errno.h>
 	#include "queue.h"
 
 	#include <pthread.h>
@@ -33,7 +33,7 @@
 	/* shared memory key                  */
 	#define SHM_KEY       (key_t)1097    
 	#define SHM_KEY1      (key_t)1098    
-
+	#define SHM_KEY2 (key_t)1099
 
 	#define SHM_SIZE      (size_t)600    
 
@@ -197,7 +197,12 @@
 	int main (int argc, char ** argv)
 	{
 	int i=0;
-
+	pid_t   server_pid, client_pid;
+        key_t MyKey;
+        int   ShmID,globalSegID;
+        pid_t *ShmPTR;
+	global_mem *message_box;	
+			
 	if(argc < 2){
 	fprintf(stderr,"Usage: ./client <num_of_threads> <reqs/thread/sec>\n");
 	exit(0);
@@ -205,12 +210,33 @@
 
 	num_threads = atoi(argv[1]);
 	frequency = atoi(argv[2]);
-
 	pthread_t thread[MAX_THREAD];
 
+	MyKey          = ftok(".", 's');        
+        ShmID          = shmget(MyKey, sizeof(pid_t), 0666);
+        message_box    = (pid_t *) shmat(ShmID, NULL, 0);
+        server_pid     = message_box->server;                
+        //shmctl(ShmID, IPC_RMID, NULL);
+	printf("Server's PID is %d\n",server_pid);
+	client_pid = getpid();
+  	printf("Client PID %d\n",client_pid);
+
+	for(i=0;message_box->client[i]!=0;i++);
+	printf("Index is %d\n",i);	
+	message_box->client[i] = client_pid;
+
+
+	/*Send a Signal to Server*/
+	kill(server_pid, SIGUSR1);
+	
+	while(1){}	
+#if 0
 	for(i=0;i<num_threads;i++){
 	pthread_create(&thread[i],NULL,generate_request,(void*)i);
 	}
 	pthread_exit(0);
+#endif
+	shmdt(message_box);
+
 	return 0;
 	}
